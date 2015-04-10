@@ -6,10 +6,53 @@ import os
 import sys
 import urllib2
 import xml.dom.minidom as xml
+import re 
 
 import nflgame
 from nflgame import OrderedDict
 
+DETAILED_STATS_START_YEAR = 2009
+
+def sort_nicely( l ): 
+  """ Sort the given list in the way that humans expect. 
+  """ 
+  convert = lambda text: int(text) if text.isdigit() else text 
+  alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
+  l.sort( key=alphanum_key ) 
+
+def get_filenames(dir_path, starts_with, ends_with):
+    """
+    Returns a list of all filenames in a dir
+    that starts with a given string 
+    and ends with a given string
+    eg: get_filenames("./nfl-schedules", "1970", ".xml")
+    """
+    filenames = []
+    try:
+        for file in os.listdir(dir_path):
+            if file.startswith(starts_with) and file.endswith(ends_with):
+                filenames.append(file)
+    except OSError:
+        sys.stderr.write("could not load %s\n" % dir_path)
+    return filenames
+
+def build_old(nfl_schedules_path):
+    sched = OrderedDict()
+    xml_filenames = get_filenames(nfl_schedules_path, "", ".xml")
+    sort_nicely(xml_filenames)
+    xml_filenames.reverse()
+    cur_year = DETAILED_STATS_START_YEAR
+    for xml_file in xml_filenames:
+        year,week,stype = xml_file.split(".xml")[0].split("-")
+        year = int(year)
+        week = int(week)
+        if year < cur_year:
+            print(str(year))
+            cur_year = year
+        if year < DETAILED_STATS_START_YEAR:
+            print('Building (%d, %s, %d)...' % (year, stype, week))
+            update_week(sched, year, stype, week, nfl_schedules_path)
+    return sched
 
 def year_phase_week(year=None, phase=None, week=None):
     cur_year, _ = nflgame.live.current_year_and_week()
@@ -18,7 +61,7 @@ def year_phase_week(year=None, phase=None, week=None):
         ('REG', xrange(1, 17 + 1)),
         ('POST', xrange(1, 4 + 1)),
     )
-    for y in range(2009, cur_year+1):
+    for y in range(DETAILED_STATS_START_YEAR, cur_year+1):
         if year is not None and year != y:
             continue
         for p, weeks in season_types:
@@ -44,21 +87,7 @@ def schedule_url(year, stype, week):
             week += 1
     return '%sseason=%d&seasonType=%s&week=%d' % (xmlurl, year, stype, week)
 
-
-def week_schedule(year, stype, week):
-    """
-    Returns a list of dictionaries with information about each game in
-    the week specified. The games are ordered by gsis_id. `year` should
-    be an integer, `stype` should be one of the strings `PRE`, `REG` or
-    `POST`, and `gsis_week` should be a value in the range `[1, 17]`.
-    """
-    url = schedule_url(year, stype, week)
-    try:
-        dom = xml.parse(urllib2.urlopen(url))
-    except urllib2.HTTPError:
-        print >> sys.stderr, 'Could not load %s' % url
-        return []
-
+def get_games(dom, year, stype, week):
     games = []
     for g in dom.getElementsByTagName("g"):
         gsis_id = g.getAttribute('eid')
@@ -74,9 +103,34 @@ def week_schedule(year, stype, week):
             'home': g.getAttribute('h'),
             'away': g.getAttribute('v'),
             'gamekey': g.getAttribute('gsis'),
+            'home_score': g.getAttribute('hs'),
+            'away_score': g.getAttribute('vs')
         })
     return games
 
+def week_schedule(year, stype, week, nfl_schedules_path=None):
+    """
+    Returns a list of dictionaries with information about each game in
+    the week specified. The games are ordered by gsis_id. `year` should
+    be an integer, `stype` should be one of the strings `PRE`, `REG` or
+    `POST`, and `gsis_week` should be a value in the range `[1, 17]`.
+    """
+    if nfl_schedules_path is None:
+        url = schedule_url(year, stype, week)
+        try:
+            dom = xml.parse(urllib2.urlopen(url))
+        except urllib2.HTTPError:
+            sys.stderr.write("could not load %s\n" % url)
+            return []
+    else:
+        xml_filename = nfl_schedules_path + "/" + str(year) + "-" + str(week) + "-" + stype + ".xml"
+        try:
+            dom = xml.parse(open(xml_filename))
+        except IOError:
+            sys.stderr.write("could not load %s\n" % xml_filename)
+            return []
+
+    return get_games(dom, year, stype, week)
 
 def new_schedule():
     """
@@ -87,16 +141,18 @@ def new_schedule():
         update_week(sched, year, stype, week)
     return sched
 
-
-def update_week(sched, year, stype, week):
+def update_week(sched, year, stype, week, nfl_schedules_path=None):
     """
     Updates the schedule for the given week in place. `year` should be
     an integer year, `stype` should be one of the strings `PRE`, `REG`
     or `POST`, and `week` should be an integer in the range `[1, 17]`.
     """
-    for game in week_schedule(year, stype, week):
-        sched[game['eid']] = game
-
+    if nfl_schedules_path is None:
+        for game in week_schedule(year, stype, week):
+            sched[game['eid']] = game
+    else:
+        for game in week_schedule(year, stype, week, nfl_schedules_path):
+            sched[game['eid']] = game
 
 def write_schedule(fpath, sched):
     alist = []
@@ -106,11 +162,9 @@ def write_schedule(fpath, sched):
               open(fpath, 'w+'), indent=1, sort_keys=True,
               separators=(',', ': '))
 
-
 def eprint(*args, **kwargs):
     kwargs['file'] = sys.stderr
     print(*args, **kwargs)
-
 
 def run():
     parser = argparse.ArgumentParser(
@@ -131,6 +185,9 @@ def run():
        help='Force the update to a specific phase.')
     aa('--week', default=None, type=int,
        help='Force the update to a specific week.')
+    aa('--build-old', default=None, type=str,
+       help='When set, the directory path provided containing downloaded NFL xml schedules'
+            'from 2008 and before will be updated to the schedule.json file')
     args = parser.parse_args()
 
     if args.json_update_file is None:
@@ -145,6 +202,8 @@ def run():
 
     if args.rebuild:
         sched = new_schedule()
+    elif args.build_old:
+        sched = build_old(args.build_old)
     else:
         sched, last = nflgame.sched._create_schedule(args.json_update_file)
         print('Last updated: %s' % last)

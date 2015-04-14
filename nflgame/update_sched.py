@@ -91,6 +91,11 @@ def get_games(dom, year, stype, week):
     games = []
     for g in dom.getElementsByTagName("g"):
         gsis_id = g.getAttribute('eid')
+        normalized_gsis = g.getAttribute('gsis')
+        # edge case, a few games from 1975 (mostly Preseason games)
+        # have mislabeled the gamekey as the eid so set them to 0
+        if len(normalized_gsis) > 5:
+            normalized_gsis = "0"
         games.append({
             'eid': gsis_id,
             'wday': g.getAttribute('d'),
@@ -102,9 +107,9 @@ def get_games(dom, year, stype, week):
             'week': week,
             'home': g.getAttribute('h'),
             'away': g.getAttribute('v'),
-            'gamekey': g.getAttribute('gsis'),
-            'home_score': g.getAttribute('hs'),
-            'away_score': g.getAttribute('vs')
+            'gamekey': normalized_gsis,
+            'score_home': int(g.getAttribute('hs')),
+            'score_away': int(g.getAttribute('vs'))
         })
     return games
 

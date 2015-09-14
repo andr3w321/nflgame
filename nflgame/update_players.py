@@ -56,6 +56,13 @@ import nflgame
 import nflgame.live
 import nflgame.player
 
+try:
+    import lxml
+except ImportError:
+    lxml_installed = False
+else:
+    lxml_installed = True
+
 urls = {
     'roster': 'http://www.nfl.com/teams/roster?team=%s',
     'gsis_profile': 'http://www.nfl.com/players/profile?id=%s',
@@ -120,7 +127,10 @@ def roster_soup(team):
     resp, content = new_http().request(urls['roster'] % team, 'GET')
     if resp['status'] != '200':
         return None
-    return BeautifulSoup(content)
+    if lxml_installed:
+        return BeautifulSoup(content, "lxml")
+    else:
+        return BeautifulSoup(content)
 
 
 def try_int(s):
@@ -190,7 +200,10 @@ def meta_from_profile_html(html):
     if not html:
         return html
     try:
-        soup = BeautifulSoup(html)
+        if lxml_installed:
+            soup = BeautifulSoup(html, "lxml")
+        else:
+            soup = BeautifulSoup(html)
         pinfo = soup.find(id='player-bio').find(class_='player-info')
 
         # Get the full name and split it into first and last.
